@@ -1,0 +1,19 @@
+[project]
+name = "platform"
+version = "1.0.0"
+description = "Kisspeeker platform (pyinfra)"
+readme = "README.md"
+authors = [
+    { name = "kisspeeker", email = "kisspeeker@icloud.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "cryptography>=50",
+    "edge-infra @ git+ssh://git@gitlab.com/kisspeeker-dev/edge-infra.git@master",
+    "pyinfra>=3.10.0",
+    "pyyaml>=6.0",
+    "segno>=1.6",
+]
+
+[tool.uv]
+package = false

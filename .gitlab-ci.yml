@@ -1,0 +1,15 @@
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
+stages:
+  - verify
+  - promote
+
+include:
+  - local: .gitlab/ci/security.yml
+  - local: .gitlab/ci/caddy.yml
+  - project: "kisspeeker/shared-ci"
+    ref: master
+    file:
+      - /templates/gitlab-image.yml

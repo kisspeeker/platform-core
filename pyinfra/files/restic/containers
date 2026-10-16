@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+STATE=/run/platform-restic/stopped
+
+case "${1:-}" in
+  stop)
+    mkdir -p "$(dirname "${STATE}")"
+    if [ $# -ge 2 ]; then
+      ids="$(docker ps -q --filter "$2")"
+    else
+      ids="$(docker ps -q)"
+    fi
+    [ -n "${ids}" ] || exit 0
+    printf '%s\n' "${ids}" >> "${STATE}"
+    printf '%s\n' "${ids}" | xargs docker stop -t 120
+    ;;
+  start)
+    [ -f "${STATE}" ] || exit 0
+    ids="$(sort -u "${STATE}")"
+    [ -z "${ids}" ] || printf '%s\n' "${ids}" | xargs docker start
+    rm -f "${STATE}"
+    ;;
+  *)
+    echo "usage: $0 stop [filter] | start" >&2
+    exit 2
+    ;;
+esac

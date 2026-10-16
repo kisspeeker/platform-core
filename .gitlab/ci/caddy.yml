@@ -1,0 +1,17 @@
+---
+
+build_caddy:
+  extends: .build_gitlab_image
+  stage: verify
+  variables:
+    IMAGE_REPO: "$CI_REGISTRY_IMAGE/caddy-cloudflare"
+    DOCKERFILE: stacks/caddy/docker/Dockerfile
+    CONTEXT: stacks/caddy/docker
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - stacks/caddy/docker/**/*
+        - .gitlab/ci/caddy.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true

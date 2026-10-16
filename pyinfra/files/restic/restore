@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+SNAPSHOT="${1:-latest}"
+case "${2:-primary}" in
+  primary) ENV_FILE=/etc/platform-restic.env; LOCK="" ;;
+  # Offsite is append-only
+  offsite) ENV_FILE=/etc/platform-restic-offsite.env; LOCK="--no-lock" ;;
+  *) echo "usage: $0 [snapshot] [primary|offsite]" >&2; exit 2 ;;
+esac
+
+HOOKS="$(dirname "$0")"
+
+set -a
+# shellcheck disable=SC1090
+. "${ENV_FILE}"
+set +a
+
+: "${PLATFORM_ROOT:?PLATFORM_ROOT missing from ${ENV_FILE}}"
+STAGING="${PLATFORM_ROOT}.restore"
+
+rm -rf "${STAGING}"
+restic restore ${LOCK} "${SNAPSHOT}:${PLATFORM_ROOT}" --host "${PLATFORM_RESTIC_HOST}" --target "${STAGING}"
+
+"${HOOKS}/containers" stop
+trap '"${HOOKS}/containers" start' EXIT
+
+for d in data secrets backups; do
+  [ -d "${STAGING}/${d}" ] || continue
+  rm -rf "${PLATFORM_ROOT}/${d}.pre-restore"
+  [ ! -e "${PLATFORM_ROOT}/${d}" ] || mv "${PLATFORM_ROOT}/${d}" "${PLATFORM_ROOT}/${d}.pre-restore"
+  mv "${STAGING}/${d}" "${PLATFORM_ROOT}/${d}"
+done
+rm -rf "${STAGING}"

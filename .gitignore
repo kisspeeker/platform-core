@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+pyinfra/pyinfra-debug.log
+
+# OS / IDE
+.DS_Store
+/.idea
+.vscode/*
+
+# Secrets / local dumps (AWG private keys — никогда в git)
+**/.env
+**/.env.*
+!**/.env.example
+**/*.key
+**/*.pem
+/secrets/
+/.artefacts/
+/.backup/
+# customer data — локальные symlink; в git только эталон example/
+/customers/*
+!/customers/example/
+!/customers/example/**
+
+.temp
+.tmp
+
+# OpenTofu
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+!**/*.tfvars.example
+**/crash.log
+**/override.tf
+**/override.tf.json
+**/*_override.tf
+**/*_override.tf.json

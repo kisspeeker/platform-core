@@ -1,0 +1,79 @@
+---
+
+# Standard repository vulnerability, secret, and IaC misconfiguration scanner.
+# Docs: https://trivy.dev/latest/docs/target/filesystem/
+security_audit:
+  stage: verify
+  interruptible: true
+  image:
+    name: ghcr.io/aquasecurity/trivy:0.75.0.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9
+    entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: .trivycache
+    TRIVY_NO_PROGRESS: "true"
+  cache:
+    key: trivy-db
+    paths:
+      - .trivycache/
+  script:
+    - trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+.trivy_image_audit:
+  interruptible: true
+  image:
+    name: ghcr.io/aquasecurity/trivy:0.75.0.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9
+    entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: .trivycache
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_USERNAME: $CI_REGISTRY_USER
+    TRIVY_PASSWORD: $CI_REGISTRY_PASSWORD
+  cache:
+    key: trivy-db
+    paths:
+      - .trivycache/
+
+caddy_candidate_audit:
+  extends: .trivy_image_audit
+  stage: verify
+  needs: [build_caddy]
+  script:
+    - trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$CI_REGISTRY_IMAGE/caddy-cloudflare:candidate-$CI_COMMIT_SHA"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - stacks/caddy/docker/**/*
+        - .gitlab/ci/caddy.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+
+# Scheduled verification of the image currently used by all stacks.
+caddy_image_audit:
+  extends: .trivy_image_audit
+  stage: verify
+  script:
+    - trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$CI_REGISTRY_IMAGE/caddy-cloudflare:latest"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+promote_caddy:
+  stage: promote
+  image:
+    name: gcr.io/go-containerregistry/crane:debug
+    entrypoint: [""]
+  script:
+    - crane auth login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - crane tag "$CI_REGISTRY_IMAGE/caddy-cloudflare:candidate-$CI_COMMIT_SHA" latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - stacks/caddy/docker/**/*
+        - .gitlab/ci/caddy.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true

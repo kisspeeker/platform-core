@@ -1,0 +1,30 @@
+{
+	email {{ acme_email }}
+	acme_dns cloudflare {env.CF_ACME_TOKEN}
+	servers {
+		# cloudflared в Docker network `proxy`
+		trusted_proxies static {{ proxy_subnet }}
+		client_ip_headers Cf-Connecting-Ip
+	}
+	log {
+		output file /var/log/caddy/caddy.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+({{ snippet }}) {
+	tls {
+		dns cloudflare {env.CF_ACME_TOKEN}
+		dns_challenge_override_domain {{ acme_override }}
+	}
+	@outside not remote_ip {{ mesh_cidr }}
+	respond @outside 404
+}
+
+import /etc/caddy/sites/*.caddy
+
+:80 {
+	respond 404
+}

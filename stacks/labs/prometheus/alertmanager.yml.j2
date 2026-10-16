@@ -1,0 +1,50 @@
+{% if telegram_enabled %}
+templates:
+  - /etc/alertmanager/telegram.tmpl
+
+route:
+  receiver: telegram-monitoring-silent
+  group_by: ["alertname", "host"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: telegram-monitoring-loud
+      matchers:
+        - severity="page"
+
+receivers:
+  - name: telegram-monitoring-silent
+    telegram_configs:
+      - bot_token: {{ telegram_token_yaml }}
+        chat_id: {{ telegram_chat_id }}
+{% if telegram_monitoring_thread_id %}
+        message_thread_id: {{ telegram_monitoring_thread_id }}
+{% endif %}
+        send_resolved: true
+        disable_notifications: true
+        parse_mode: HTML
+        message: '{% raw %}{{ template "telegram.platform.message" . }}{% endraw %}'
+
+  - name: telegram-monitoring-loud
+    telegram_configs:
+      - bot_token: {{ telegram_token_yaml }}
+        chat_id: {{ telegram_chat_id }}
+{% if telegram_monitoring_thread_id %}
+        message_thread_id: {{ telegram_monitoring_thread_id }}
+{% endif %}
+        send_resolved: true
+        disable_notifications: false
+        parse_mode: HTML
+        message: '{% raw %}{{ template "telegram.platform.message" . }}{% endraw %}'
+{% else %}
+route:
+  receiver: noop
+  group_by: ["alertname", "host"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: noop
+{% endif %}

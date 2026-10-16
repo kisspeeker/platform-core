@@ -1,0 +1,16 @@
+(mesh_only) {
+	@outside not remote_ip {{ mesh_cidr }}
+	respond @outside 404
+}
+
+# alias for customers that want whole mesh CIDR (same as mesh_only)
+(mesh_customer) {
+	@outside not remote_ip {{ mesh_cidr }}
+	respond @outside 404
+}
+
+# admin services — explicit peer IPs
+(mesh_admin) {
+	@outside not remote_ip {{ mesh_admin_ips | join(" ") }}
+	respond @outside 404
+}

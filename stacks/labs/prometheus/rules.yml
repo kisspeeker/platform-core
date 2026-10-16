@@ -1,0 +1,121 @@
+---
+
+groups:
+  - name: lab
+    rules:
+      - alert: HostDown
+        expr: up{job="node",host!=""} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} unreachable (scrape)"
+          description: "Check mesh reachability, firewall TCP/9100, then lab-node-exporter."
+
+      - alert: ContainerBad
+        expr: platform_container_bad == 1
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} container {{ $labels.name }} is {{ $labels.state }}"
+          description: "Check the container logs and inspect its health and exit status."
+      - alert: ContainerDown
+        expr: platform_container_up == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} container {{ $labels.name }} is not running"
+          description: "Check whether the stop was intentional, then inspect exit status and logs."
+      - alert: EndpointDown
+        expr: probe_success{job="blackbox"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }} endpoint is unavailable from {{ $labels.host }}"
+          description: "Check the endpoint, DNS, TLS, Caddy, and the upstream service."
+      - alert: BlackboxExporterDown
+        expr: up{job="blackbox-exporter"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} Blackbox Exporter is unavailable"
+          description: "Check lab-blackbox-exporter status, logs, and the metrics network."
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+          ) < 0.15
+          and (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+          ) >= 0.05
+          and node_filesystem_readonly{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.mountpoint }} under 15% free"
+          description: "Check df -h and identify the largest directories on the affected mount."
+      - alert: DiskSpaceCritical
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"}
+          ) < 0.05
+          and node_filesystem_readonly{fstype!~"tmpfs|overlay|squashfs|ramfs",mountpoint!~"/boot.*"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} disk {{ $labels.mountpoint }} under 5% free"
+          description: "Free space immediately; inspect df -h, journal size, Docker data, and large files."
+      - alert: FilesystemReadOnly
+        expr: node_filesystem_readonly{fstype!~"tmpfs|overlay|squashfs|ramfs"} == 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.host }} filesystem {{ $labels.mountpoint }} is read-only"
+          description: "Check kernel and filesystem errors, storage health, and mount state."
+      - alert: MemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} memory under 10% available"
+          description: "Check top and docker stats to identify the memory consumer."
+      - alert: CpuSaturated
+        expr: 100 - (avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} CPU over 90% for 15m"
+          description: "Check top and docker stats to identify the CPU consumer."
+      - alert: TLSCertificateExpiringSoon
+        expr: |
+          (probe_ssl_earliest_cert_expiry{job="blackbox"} - time() < 14 * 24 * 60 * 60)
+          and on(instance) probe_success{job="blackbox"} == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} TLS certificate expires within 14 days"
+          description: "Check the certificate issuer, Caddy ACME logs, DNS, and certificate renewal."
+      - alert: RebootRequired
+        expr: platform_reboot_required == 1
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} requires a reboot after updates"
+          description: "Schedule a reboot, then verify containers, monitoring, and external endpoints."

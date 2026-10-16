@@ -1,0 +1,9 @@
+{% for snippet in (['tls.caddy'] + (platform_seed_caddy | default([]))) -%}
+import /etc/caddy/snippets/{{ snippet }}
+
+{% endfor -%}
+import /etc/caddy/sites/*.caddy
+
+:80 {
+	respond 404
+}

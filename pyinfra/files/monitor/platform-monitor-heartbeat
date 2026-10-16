@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+set -a
+# shellcheck disable=SC1091
+. /opt/platform/secrets/monitoring/healthchecks.env
+set +a
+
+probe() {
+  metrics=$(curl --fail --silent --show-error --max-time 15 \
+    --get \
+    --data-urlencode module=http_2xx \
+    --data-urlencode target="$1" \
+    http://127.0.0.1:9115/probe)
+  printf '%s\n' "$metrics" | grep -qx 'probe_success 1'
+}
+
+probe "$MONITOR_PROMETHEUS_URL"
+probe "$MONITOR_ALERTMANAGER_URL"
+
+if [ -n "${MONITOR_EXTERNAL_URL:-}" ]; then
+  probe "${MONITOR_EXTERNAL_URL%/}/-/ready"
+fi
+
+curl --fail --silent --show-error --max-time 15 \
+  --retry 2 --retry-connrefused \
+  "$HEALTHCHECKS_URL" >/dev/null

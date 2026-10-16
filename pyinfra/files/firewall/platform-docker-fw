@@ -1,0 +1,161 @@
+#!/bin/sh
+# Requires Docker's iptables firewall backend and the DOCKER-USER chain.
+# Containers must not use the host as a router into the mesh.
+# The metrics network may use only the configured mesh TCP ports.
+# Published monitoring ports accept only their configured peer.
+#
+# Optional config: /etc/platform-docker-fw
+#   mesh_egress_ports='9100'
+#   allow_9100_from='192.0.2.10'
+#   allow_monitor_from='192.0.2.11'
+#   allow_blackbox_from='192.0.2.10'
+
+set -eu
+
+conf=/etc/platform-docker-fw
+mesh_egress_ports=
+allow_9100_from=
+allow_monitor_from=
+allow_blackbox_from=
+
+if [ -f "$conf" ]; then
+  # shellcheck disable=SC1090
+  . "$conf"
+fi
+
+i=0
+while ! iptables -L DOCKER-USER >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -le 20 ] || exit 1
+  sleep 1
+done
+
+network_bridge() {
+  network_id=$(docker network inspect "$1" -f '{{.Id}}' 2>/dev/null || true)
+  if [ -n "$network_id" ]; then
+    # Docker's default bridge interface name for a user-defined bridge network.
+    printf 'br-%.12s' "$network_id"
+  fi
+}
+
+metrics_bridge=$(network_bridge metrics)
+proxy_bridge=$(network_bridge proxy)
+
+setup_docker_rules() {
+  fw_cmd=$1
+
+  "$fw_cmd" -N PLATFORM-DOCKER 2>/dev/null || true
+  "$fw_cmd" -F PLATFORM-DOCKER
+
+  if [ -n "$metrics_bridge" ]; then
+    for port in $mesh_egress_ports; do
+      "$fw_cmd" -A PLATFORM-DOCKER \
+        -i "$metrics_bridge" -o awg0 \
+        -p tcp --dport "$port" -j RETURN
+    done
+  fi
+
+  # Permit replies to established connections in either direction. New
+  # connections from containers into the mesh remain blocked by the rule below.
+  "$fw_cmd" -A PLATFORM-DOCKER \
+    -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+
+  # Block containers from forwarding traffic through the host into the mesh.
+  "$fw_cmd" -A PLATFORM-DOCKER -o awg0 -j DROP
+
+  # DOCKER-USER sees DNATed packets, so match the original published port.
+  restrict_published_port "$fw_cmd" 9100 "$allow_9100_from"
+  restrict_published_port "$fw_cmd" 9090 "$allow_monitor_from"
+  restrict_published_port "$fw_cmd" 9093 "$allow_monitor_from"
+  restrict_published_port "$fw_cmd" 9115 "$allow_blackbox_from"
+
+  # On the proxy network, allow only Caddy and cloudflared to initiate
+  # connections to other containers on that same network.
+  if [ -n "$proxy_bridge" ]; then
+    "$fw_cmd" -A PLATFORM-DOCKER \
+      -i "$proxy_bridge" -o "$proxy_bridge" \
+      -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+
+    for name in caddy cloudflared; do
+      if [ "$fw_cmd" = ip6tables ]; then
+        container_ip=$(docker inspect \
+          -f '{{with index .NetworkSettings.Networks "proxy"}}{{.GlobalIPv6Address}}{{end}}' \
+          "$name" 2>/dev/null || true)
+      else
+        container_ip=$(docker inspect \
+          -f '{{with index .NetworkSettings.Networks "proxy"}}{{.IPAddress}}{{end}}' \
+          "$name" 2>/dev/null || true)
+      fi
+
+      # Zero netip.Addr stringifies as "invalid IP", which ip6tables rejects.
+      # https://pkg.go.dev/net/netip#Addr.String
+      case "$container_ip" in
+        ""|*[!0-9A-Fa-f:.]*) continue ;;
+      esac
+
+      "$fw_cmd" -A PLATFORM-DOCKER \
+        -i "$proxy_bridge" -o "$proxy_bridge" \
+        -s "$container_ip" -j RETURN
+    done
+
+    "$fw_cmd" -A PLATFORM-DOCKER \
+      -i "$proxy_bridge" -o "$proxy_bridge" -j DROP
+  fi
+
+  "$fw_cmd" -A PLATFORM-DOCKER -j RETURN
+
+  if ! "$fw_cmd" -C DOCKER-USER -j PLATFORM-DOCKER 2>/dev/null; then
+    "$fw_cmd" -I DOCKER-USER 1 -j PLATFORM-DOCKER
+  fi
+}
+
+restrict_published_port() {
+  fw_cmd=$1
+  port=$2
+  allowed_source=$3
+
+  if [ "$fw_cmd" = ip6tables ]; then
+    allowed_source=
+  fi
+
+  if [ -n "$allowed_source" ]; then
+    "$fw_cmd" -A PLATFORM-DOCKER \
+      -i awg0 -p tcp -m conntrack --ctorigdstport "$port" \
+      ! -s "$allowed_source" -j DROP
+  else
+    "$fw_cmd" -A PLATFORM-DOCKER \
+      -i awg0 -p tcp -m conntrack --ctorigdstport "$port" -j DROP
+  fi
+}
+
+setup_input_rules() {
+  fw_cmd=$1
+
+  "$fw_cmd" -N PLATFORM-INPUT 2>/dev/null || true
+  "$fw_cmd" -F PLATFORM-INPUT
+
+  "$fw_cmd" -A PLATFORM-INPUT \
+    -i br-+ -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  "$fw_cmd" -A PLATFORM-INPUT \
+    -i docker0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  "$fw_cmd" -A PLATFORM-INPUT -i br-+ -j DROP
+  "$fw_cmd" -A PLATFORM-INPUT -i docker0 -j DROP
+  "$fw_cmd" -A PLATFORM-INPUT -j RETURN
+
+  if ! "$fw_cmd" -C INPUT -j PLATFORM-INPUT 2>/dev/null; then
+    "$fw_cmd" -I INPUT 1 -j PLATFORM-INPUT
+  fi
+}
+
+setup_docker_rules iptables
+setup_input_rules iptables
+
+if command -v ip6tables >/dev/null 2>&1; then
+  setup_input_rules ip6tables
+
+  # Docker creates this chain when its IPv6 iptables filtering is enabled.
+  # If it is absent, IPv6 Docker forwarding rules cannot be attached here.
+  if ip6tables -L DOCKER-USER >/dev/null 2>&1; then
+    setup_docker_rules ip6tables
+  fi
+fi

@@ -1,0 +1,19 @@
+# Docs: https://man.openbsd.org/sshd_config
+
+Port {{ ssh_port }}
+
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+
+UsePAM yes
+X11Forwarding no
+PermitTunnel no
+AllowAgentForwarding no
+
+MaxAuthTries 3
+LoginGraceTime 30
+
+AllowUsers {{ admin_user }} {{ deploy_user }}

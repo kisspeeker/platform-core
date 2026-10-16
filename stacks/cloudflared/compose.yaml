@@ -1,0 +1,25 @@
+---
+
+services:
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
+    pull_policy: ${PULL_POLICY:-missing}
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    env_file:
+      - /opt/platform/secrets/cloudflared/cloudflared.env
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    name: proxy
+    external: true

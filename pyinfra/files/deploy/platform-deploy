@@ -1,0 +1,327 @@
+#!/bin/sh
+
+set -eu
+umask 077
+
+# CI передаёт token через stdin; project, sha, image (- если нет) и env — в SSH-команде.
+if ! IFS= read -r token; then
+  token=
+fi
+[ -n "$token" ] || {
+  echo "token missing" >&2
+  exit 1
+}
+
+# Запрещаем shell metacharacters и globbing до разбиения SSH-команды на слова
+original_command=${SSH_ORIGINAL_COMMAND:-}
+printf '%s' "$original_command" |
+  grep -Eq '^[A-Za-z0-9._/:@ -]+$' || {
+    echo "bad command" >&2
+    exit 1
+  }
+
+set -f
+# Намеренное разбиение по пробелам после проверки допустимых символов.
+# shellcheck disable=SC2086
+set -- $original_command
+
+case $# in
+  4) project=$1; sha=$2; image=$3; deploy_env=$4 ;;
+  *)
+    echo "expected: project sha image env" >&2
+    exit 1
+    ;;
+esac
+
+set +f
+
+set -a
+# shellcheck disable=SC1091
+. /opt/platform/host.env
+set +a
+
+: "${PLATFORM_ROOT:?PLATFORM_ROOT missing from host.env}"
+: "${DEPLOY_GROUP:?DEPLOY_GROUP missing from host.env}"
+: "${GITLAB_REGISTRY:?GITLAB_REGISTRY missing from host.env}"
+
+root=$PLATFORM_ROOT
+sites="$root/stacks/caddy/config/sites"
+
+# Проверяем группу из root-owned host.env и env из CI перед использованием
+# в URL и имени файла.
+printf '%s' "$DEPLOY_GROUP" |
+  grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || {
+    echo "bad DEPLOY_GROUP" >&2
+    exit 1
+  }
+
+case "/$DEPLOY_GROUP/" in
+  */./*|*/../*)
+    echo "bad DEPLOY_GROUP" >&2
+    exit 1
+    ;;
+esac
+
+printf '%s' "$deploy_env" |
+  grep -Eq '^[A-Za-z0-9._-]+$' || {
+    echo "bad env" >&2
+    exit 1
+  }
+
+case "$deploy_env" in
+  .|..)
+    echo "bad env" >&2
+    exit 1
+    ;;
+esac
+
+export DEPLOY_ENV="$deploy_env"
+
+case "$project" in
+  "$DEPLOY_GROUP"/*) ;;
+  *)
+    echo "project outside $DEPLOY_GROUP" >&2
+    exit 1
+    ;;
+esac
+
+printf '%s' "$project" |
+  grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || {
+    echo "bad project" >&2
+    exit 1
+  }
+
+case "/$project/" in
+  */./*|*/../*)
+    echo "bad project" >&2
+    exit 1
+    ;;
+esac
+
+printf '%s' "$sha" |
+  grep -Eq '^[0-9a-f]{40}$' || {
+    echo "bad sha" >&2
+    exit 1
+  }
+
+printf '%s' "$image" |
+  grep -Eq '^[A-Za-z0-9._:/@-]*$' || {
+    echo "bad image" >&2
+    exit 1
+  }
+
+[ "$image" != "-" ] || image=
+
+name=$(printf '%s' "$project" | tr '/' '-')
+dest="$root/stacks/$name"
+url="https://gitlab.com/$project.git"
+
+# Не используем predictable временный DOCKER_CONFIG в домашнем каталоге:
+# registry credentials удаляются при завершении скрипта.
+docker_config=$(mktemp -d "${TMPDIR:-/tmp}/platform-deploy.XXXXXX")
+chmod 700 "$docker_config"
+export DOCKER_CONFIG="$docker_config"
+
+site=
+site_tmp=
+site_backup=
+site_changed=0
+site_existed=0
+
+cleanup() {
+  if [ "$site_changed" -eq 1 ]; then
+    if [ "$site_existed" -eq 1 ] && [ -n "$site_backup" ] && [ -f "$site_backup" ]; then
+      mv "$site_backup" "$site" || :
+    elif [ -n "$site" ]; then
+      rm -f "$site" || :
+    fi
+
+    if [ -n "$site" ]; then
+      docker exec caddy caddy reload \
+        --config /etc/caddy/Caddyfile \
+        --adapter caddyfile >/dev/null 2>&1 || :
+    fi
+  fi
+
+  if [ -n "$site_tmp" ]; then
+    rm -f "$site_tmp" || :
+  fi
+  if [ -n "$site_backup" ]; then
+    rm -f "$site_backup" || :
+  fi
+
+  docker logout "$GITLAB_REGISTRY" >/dev/null 2>&1 || :
+  rm -rf "$docker_config" || :
+}
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+
+auth=$(
+  printf 'gitlab-ci-token:%s' "$token" |
+    base64 |
+    tr -d '\n'
+)
+
+git_auth() {
+  git -c "http.extraheader=Authorization: Basic $auth" "$@"
+}
+
+if [ -L "$dest" ]; then
+  echo "stack path must not be a symlink: $dest" >&2
+  exit 1
+fi
+
+if [ -d "$dest/.git" ]; then
+  current_url=$(git -C "$dest" remote get-url origin)
+  [ "$current_url" = "$url" ] || {
+    echo "stack path collision: $dest belongs to another repository" >&2
+    exit 1
+  }
+elif [ -e "$dest" ]; then
+  echo "stack path exists but is not a git repository: $dest" >&2
+  exit 1
+else
+  git_auth clone --no-checkout --depth 1 "$url" "$dest"
+fi
+
+cd "$dest"
+git_auth fetch --depth 1 origin "$sha"
+git checkout --force --detach "$sha"
+
+if [ -n "$image" ]; then
+  export IMAGE="$image"
+fi
+
+export SOPS_AGE_KEY_FILE="$root/secrets/sops/age.key"
+
+secrets="secrets.sops.env"
+if [ -f "secrets.${DEPLOY_ENV}.sops.env" ]; then
+  secrets="secrets.${DEPLOY_ENV}.sops.env"
+fi
+
+run() {
+  if [ -f "$secrets" ]; then
+    sops exec-env "$secrets" "$*"
+  else
+    "$@"
+  fi
+}
+
+# Подставляет ${NAME} из окружения в Caddyfile.
+# Caddy placeholders вида {env.NAME} остаются без изменений.
+# shellcheck disable=SC2016
+caddy_awk='
+{
+  out = ""
+  rest = $0
+  while (match(rest, /\$[{][A-Za-z_][A-Za-z0-9_]*[}]/)) {
+    key = substr(rest, RSTART + 2, RLENGTH - 3)
+    val = ENVIRON[key]
+    if (val == "") {
+      printf("missing %s\n", key) > "/dev/stderr"
+      exit 1
+    }
+    out = out substr(rest, 1, RSTART - 1) val
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  print out rest
+}
+'
+
+printf '%s' "$token" |
+  docker login "$GITLAB_REGISTRY" \
+    -u gitlab-ci-token \
+    --password-stdin >/dev/null
+
+run docker compose pull
+run docker compose up -d --remove-orphans
+
+site="$sites/${name}.caddy"
+
+if [ -f Caddyfile ] || [ -e "$site" ] || [ -L "$site" ]; then
+  [ -d "$sites" ] || {
+    echo "caddy sites dir missing: $sites" >&2
+    exit 1
+  }
+
+  [ ! -L "$site" ] || {
+    echo "caddy site must not be a symlink: $site" >&2
+    exit 1
+  }
+
+  if [ -e "$site" ] && [ ! -f "$site" ]; then
+    echo "caddy site is not a regular file: $site" >&2
+    exit 1
+  fi
+
+  if [ -f "$site" ]; then
+    site_existed=1
+    site_backup=$(mktemp "$sites/.${name}.backup.XXXXXX")
+    cp -p "$site" "$site_backup"
+  fi
+
+  if [ -f Caddyfile ]; then
+    site_tmp=$(mktemp "$sites/.${name}.new.XXXXXX")
+
+    if [ -f "$secrets" ]; then
+      # shellcheck disable=SC2016
+      if ! CADDY_AWK="$caddy_awk" sops exec-env "$secrets" 'awk "$CADDY_AWK" Caddyfile' >"$site_tmp"; then
+        echo "failed to render Caddyfile" >&2
+        exit 1
+      fi
+    else
+      if ! awk "$caddy_awk" Caddyfile >"$site_tmp"; then
+        echo "failed to render Caddyfile" >&2
+        exit 1
+      fi
+    fi
+
+    chmod 644 "$site_tmp"
+    mv "$site_tmp" "$site"
+    site_tmp=
+    site_changed=1
+  else
+    rm -f "$site"
+    site_changed=1
+  fi
+
+  if ! docker exec caddy caddy validate \
+    --config /etc/caddy/Caddyfile \
+    --adapter caddyfile; then
+    if [ "$site_existed" -eq 1 ]; then
+      mv "$site_backup" "$site"
+      site_backup=
+    else
+      rm -f "$site"
+    fi
+    site_changed=0
+    echo "Caddy configuration validation failed" >&2
+    exit 1
+  fi
+
+  if ! docker exec caddy caddy reload \
+    --config /etc/caddy/Caddyfile \
+    --adapter caddyfile; then
+    if [ "$site_existed" -eq 1 ]; then
+      mv "$site_backup" "$site"
+      site_backup=
+    else
+      rm -f "$site"
+    fi
+    site_changed=0
+
+    # После отката best-effort загружаем прежнюю конфигурацию.
+    docker exec caddy caddy reload \
+      --config /etc/caddy/Caddyfile \
+      --adapter caddyfile || :
+
+    echo "Caddy reload failed" >&2
+    exit 1
+  fi
+
+  site_changed=0
+  if [ -n "$site_backup" ]; then
+    rm -f "$site_backup"
+    site_backup=
+  fi
+fi

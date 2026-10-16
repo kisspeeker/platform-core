@@ -1,0 +1,37 @@
+---
+
+services:
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.12.1}
+    pull_policy: ${PULL_POLICY:-missing}
+    container_name: lab-node-exporter
+    restart: unless-stopped
+    read_only: true
+    pid: host
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+      - --collector.textfile.directory=/textfile
+    volumes:
+      - /:/host:ro,rslave
+      - /dev/null:/host/run/docker.sock:ro
+      - /opt/platform/data/node-exporter/textfile:/textfile:ro
+{% if publish %}
+    ports:
+      - "{{ mesh_ip }}:9100:9100"
+{% endif %}
+{% if join_metrics %}
+    networks:
+      - metrics
+{% endif %}
+{% if join_metrics %}
+
+networks:
+  metrics:
+    external: true
+    name: metrics
+{% endif %}

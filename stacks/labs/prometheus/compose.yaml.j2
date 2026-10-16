@@ -1,0 +1,66 @@
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.15.0}
+    pull_policy: ${PULL_POLICY:-missing}
+    container_name: lab-prometheus
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+{% if external_url %}
+      - --web.external-url={{ external_url }}
+{% endif %}
+    volumes:
+      - /opt/platform/stacks/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /opt/platform/stacks/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - /opt/platform/data/prometheus:/prometheus
+    ports:
+      - "{{ mesh_ip }}:9090:9090"
+    networks:
+      - metrics
+{% if external_url %}
+      - proxy
+{% endif %}
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.34.1}
+    pull_policy: ${PULL_POLICY:-missing}
+    container_name: lab-alertmanager
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - /opt/platform/secrets/prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - /opt/platform/stacks/prometheus/telegram.tmpl:/etc/alertmanager/telegram.tmpl:ro
+      - /opt/platform/data/alertmanager:/alertmanager
+    ports:
+      - "{{ mesh_ip }}:9093:9093"
+    networks:
+      - metrics
+
+networks:
+  metrics:
+    external: true
+    name: metrics
+{% if external_url %}
+  proxy:
+    external: true
+    name: proxy
+{% endif %}

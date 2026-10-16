@@ -1,0 +1,8 @@
+{{ prometheus_fqdn }} {
+	import mesh_admin
+	tls {
+		dns cloudflare {env.CF_ACME_TOKEN}
+		dns_challenge_override_domain {{ acme_override }}
+	}
+	reverse_proxy lab-prometheus:9090
+}

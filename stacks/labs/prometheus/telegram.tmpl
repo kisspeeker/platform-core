@@ -1,0 +1,27 @@
+{{ define "telegram.platform.message" -}}
+{{ range .Alerts -}}
+{{ if eq .Status "resolved" -}}
+✅ <b>OK</b>
+{{- else if eq .Labels.severity "warning" -}}
+⚠️ <b>WARNING</b>
+{{- else -}}
+🔴 <b>CRITICAL</b>
+{{- end }} — Monitoring
+Alert: {{ .Labels.alertname }}
+Host: {{ with .Labels.host }}{{ . }}{{ else }}{{ .Labels.instance }}{{ end }}
+{{ if and .Labels.host .Labels.instance -}}
+Instance: {{ .Labels.instance }}
+{{ end -}}
+{{ with .Annotations.summary -}}
+Summary: {{ . }}
+{{ end -}}
+{{ with .Annotations.description }}
+
+Details:
+{{ . }}
+{{ end -}}
+{{ with .GeneratorURL -}}
+Source: {{ . }}
+{{ end }}
+{{ end -}}
+{{ end -}}

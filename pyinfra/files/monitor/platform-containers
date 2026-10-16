@@ -1,0 +1,89 @@
+#!/bin/sh
+# node_exporter textfile collector:
+# https://github.com/prometheus/node_exporter#textfile-collector
+# Docker CLI stays on the host. The socket is not mounted into any container.
+# Running and not unhealthy => up=1, bad=0.
+# Unhealthy, restarting, dead, and exited non-zero => bad=1.
+# Exited (0) => up=0, bad=0.
+set -eu
+
+set -a
+# shellcheck disable=SC1091
+. /opt/platform/host.env
+set +a
+
+: "${PLATFORM_ROOT:?PLATFORM_ROOT missing from host.env}"
+
+dir=$PLATFORM_ROOT/data/node-exporter/textfile
+file=$dir/containers.prom
+tmp=
+list=
+
+cleanup() {
+  [ -z "$tmp" ] || rm -f "$tmp"
+  [ -z "$list" ] || rm -f "$list"
+}
+
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+
+mkdir -p "$dir"
+chmod 755 "$dir"
+
+tmp=$(mktemp "$dir/.containers.XXXXXX")
+list=$(mktemp)
+
+# Keep Docker's failure separate from sort's exit status. If Docker fails,
+# set -e exits here and the previous metrics file is preserved.
+docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}' > "$list"
+LC_ALL=C sort -o "$list" "$list"
+
+cat > "$tmp" <<'EOF'
+# HELP platform_container_up 1 when the container is running and not unhealthy.
+# TYPE platform_container_up gauge
+# HELP platform_container_bad 1 when the container is unhealthy, restarting, dead, or exited non-zero.
+# TYPE platform_container_bad gauge
+# HELP platform_reboot_required 1 when Ubuntu requires a reboot after updates.
+# TYPE platform_reboot_required gauge
+EOF
+
+if [ -e /var/run/reboot-required ]; then
+  printf 'platform_reboot_required 1\n' >> "$tmp"
+else
+  printf 'platform_reboot_required 0\n' >> "$tmp"
+fi
+
+while IFS='|' read -r name state status; do
+  [ -n "$name" ] || continue
+
+  up=0
+  bad=0
+
+  case "$state" in
+    running)
+      case "$status" in
+        *unhealthy*) bad=1 ;;
+        *)           up=1 ;;
+      esac
+      ;;
+    exited)
+      case "$status" in
+        *'Exited (0)'*) ;;
+        *)               bad=1 ;;
+      esac
+      ;;
+    *)
+      bad=1
+      ;;
+  esac
+
+  # Docker container names and states use characters safe for these labels.
+  printf 'platform_container_up{name="%s",state="%s"} %s\n' \
+    "$name" "$state" "$up" >> "$tmp"
+  printf 'platform_container_bad{name="%s",state="%s"} %s\n' \
+    "$name" "$state" "$bad" >> "$tmp"
+done < "$list"
+
+chmod 644 "$tmp"
+mv "$tmp" "$file"
+tmp=
