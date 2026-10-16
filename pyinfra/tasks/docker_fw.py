@@ -6,34 +6,32 @@ from pathlib import Path
 from pyinfra import host
 from pyinfra.operations import files, systemd
 
+from firewall import host_ports
+
 CORE_ROOT = Path(__file__).resolve().parents[1]
 HOSTNAME = host.data.hostname
 FILTER_SCRIPT = "/usr/local/sbin/platform-docker-fw"
 FILTER_CONFIG = "/etc/platform-docker-fw"
 FILTER_SERVICE = "platform-docker-fw.service"
 
-hosts = host.data.mesh_hosts
 hub = host.data.monitor_host
 probe = host.data.monitor_probe_host
 
-mesh_egress_ports = []
-if hub and HOSTNAME == hub:
-    mesh_egress_ports.extend(("9100", "9115"))
-if probe and HOSTNAME == probe:
-    mesh_egress_ports.extend(("443", "9090", "9093"))
+netbird_ingress_ports = host_ports(
+    host.data.ports,
+    "netbird",
+    host.groups,
+    host.data,
+).values()
 
-allow_9100_from = (
-    hosts[hub]["mesh_ip"] if hub and HOSTNAME != hub else ""
-)
-allow_monitor_from = (
-    hosts[probe]["mesh_ip"] if probe and HOSTNAME == hub else ""
-)
-allow_blackbox_from = (
-    hosts[hub]["mesh_ip"] if hub and HOSTNAME == probe else ""
-)
+netbird_egress_ports = []
+if hub and HOSTNAME == hub:
+    netbird_egress_ports.extend(("9100", "9115"))
+if probe and HOSTNAME == probe:
+    netbird_egress_ports.extend(("443", "9090", "9093"))
 
 files.put(
-    name="Install Docker mesh filter",
+    name="Install Docker NetBird filter",
     src=str(CORE_ROOT / "files" / "firewall" / "platform-docker-fw"),
     dest=FILTER_SCRIPT,
     user="root",
@@ -42,12 +40,15 @@ files.put(
 )
 
 files.put(
-    name="Write Docker mesh filter config",
+    name="Write Docker NetBird filter config",
     src=io.StringIO(
-        f"mesh_egress_ports={' '.join(mesh_egress_ports)!r}\n"
-        f"allow_9100_from={allow_9100_from!r}\n"
-        f"allow_monitor_from={allow_monitor_from!r}\n"
-        f"allow_blackbox_from={allow_blackbox_from!r}\n"
+        "netbird_ingress_ports="
+        + repr(" ".join(
+            f"{spec['proto']}:{spec['port']}"
+            for spec in netbird_ingress_ports
+        ))
+        + "\n"
+        f"netbird_egress_ports={' '.join(netbird_egress_ports)!r}\n"
     ),
     dest=FILTER_CONFIG,
     user="root",
@@ -56,11 +57,11 @@ files.put(
 )
 
 files.put(
-    name="Install Docker mesh filter service",
+    name="Install Docker NetBird filter service",
     src=io.StringIO(
         "[Unit]\n"
-        "Description=Keep container traffic off the mesh\n"
-        "After=docker.service awg-quick@awg0.service\n"
+        "Description=Keep container traffic off NetBird\n"
+        "After=docker.service netbird.service\n"
         "PartOf=docker.service\n"
         "\n"
         "[Service]\n"
@@ -78,7 +79,7 @@ files.put(
 )
 
 systemd.service(
-    name="Enable Docker mesh filter",
+    name="Enable Docker NetBird filter",
     service=FILTER_SERVICE,
     running=True,
     enabled=True,

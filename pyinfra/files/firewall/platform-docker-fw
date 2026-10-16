@@ -1,22 +1,18 @@
 #!/bin/sh
 # Requires Docker's iptables firewall backend and the DOCKER-USER chain.
-# Containers must not use the host as a router into the mesh.
-# The metrics network may use only the configured mesh TCP ports.
-# Published monitoring ports accept only their configured peer.
+# Containers must not use the host as a router into NetBird.
+# The metrics network may use only the configured NetBird TCP ports.
+# Private published ports accept traffic only through NetBird.
 #
 # Optional config: /etc/platform-docker-fw
-#   mesh_egress_ports='9100'
-#   allow_9100_from='192.0.2.10'
-#   allow_monitor_from='192.0.2.11'
-#   allow_blackbox_from='192.0.2.10'
+#   netbird_ingress_ports='tcp:80 tcp:443'
+#   netbird_egress_ports='9100'
 
 set -eu
 
 conf=/etc/platform-docker-fw
-mesh_egress_ports=
-allow_9100_from=
-allow_monitor_from=
-allow_blackbox_from=
+netbird_egress_ports=
+netbird_ingress_ports=
 
 if [ -f "$conf" ]; then
   # shellcheck disable=SC1090
@@ -48,26 +44,28 @@ setup_docker_rules() {
   "$fw_cmd" -F PLATFORM-DOCKER
 
   if [ -n "$metrics_bridge" ]; then
-    for port in $mesh_egress_ports; do
+    for port in $netbird_egress_ports; do
       "$fw_cmd" -A PLATFORM-DOCKER \
-        -i "$metrics_bridge" -o awg0 \
+        -i "$metrics_bridge" -o wt0 \
         -p tcp --dport "$port" -j RETURN
     done
   fi
 
   # Permit replies to established connections in either direction. New
-  # connections from containers into the mesh remain blocked by the rule below.
+  # connections from containers into NetBird remain blocked by the rule below.
   "$fw_cmd" -A PLATFORM-DOCKER \
     -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 
-  # Block containers from forwarding traffic through the host into the mesh.
-  "$fw_cmd" -A PLATFORM-DOCKER -o awg0 -j DROP
+  # Block containers from forwarding traffic through the host into NetBird.
+  "$fw_cmd" -A PLATFORM-DOCKER -o wt0 -j DROP
 
   # DOCKER-USER sees DNATed packets, so match the original published port.
-  restrict_published_port "$fw_cmd" 9100 "$allow_9100_from"
-  restrict_published_port "$fw_cmd" 9090 "$allow_monitor_from"
-  restrict_published_port "$fw_cmd" 9093 "$allow_monitor_from"
-  restrict_published_port "$fw_cmd" 9115 "$allow_blackbox_from"
+  for endpoint in $netbird_ingress_ports; do
+    proto=${endpoint%%:*}
+    port=${endpoint#*:}
+    "$fw_cmd" -A PLATFORM-DOCKER ! -i wt0 \
+      -p "$proto" -m conntrack --ctorigdstport "$port" -j DROP
+  done
 
   # On the proxy network, allow only Caddy and cloudflared to initiate
   # connections to other containers on that same network.
@@ -106,25 +104,6 @@ setup_docker_rules() {
 
   if ! "$fw_cmd" -C DOCKER-USER -j PLATFORM-DOCKER 2>/dev/null; then
     "$fw_cmd" -I DOCKER-USER 1 -j PLATFORM-DOCKER
-  fi
-}
-
-restrict_published_port() {
-  fw_cmd=$1
-  port=$2
-  allowed_source=$3
-
-  if [ "$fw_cmd" = ip6tables ]; then
-    allowed_source=
-  fi
-
-  if [ -n "$allowed_source" ]; then
-    "$fw_cmd" -A PLATFORM-DOCKER \
-      -i awg0 -p tcp -m conntrack --ctorigdstport "$port" \
-      ! -s "$allowed_source" -j DROP
-  else
-    "$fw_cmd" -A PLATFORM-DOCKER \
-      -i awg0 -p tcp -m conntrack --ctorigdstport "$port" -j DROP
   fi
 }
 

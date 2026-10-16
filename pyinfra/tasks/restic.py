@@ -6,19 +6,38 @@ import shlex
 from pathlib import Path
 
 from pyinfra import host
+from pyinfra.facts.files import File
 from pyinfra.facts.server import Arch, Command
 from pyinfra.operations import apt, files, python, server
 
-import mesh
+from hosts import CORE
 import sops_env
 
-if not host.data.restic_enabled:
+restic_enabled = host.data.restic_enabled
+restic_profile_path = "/etc/platform-resticprofile.yaml"
+
+if not restic_enabled:
+    server.shell(
+        name="Remove obsolete Restic schedules",
+        commands=[
+            "if [ -x /usr/local/bin/resticprofile ] "
+            f"&& [ -f {restic_profile_path} ]; then "
+            "/usr/local/bin/resticprofile "
+            f"--config {restic_profile_path} unschedule --all; fi"
+        ],
+        _if=lambda: bool(host.get_fact(File, path=restic_profile_path)),
+    )
+    files.file(
+        name="Remove obsolete Resticprofile config",
+        path=restic_profile_path,
+        present=False,
+    )
     pass
 else:
     platform_root = host.data.platform_root
     platform_git_root = Path(__file__).resolve().parents[1]
     target_hostname = host.data.hostname
-    is_core = mesh.CORE in host.groups
+    is_core = CORE in host.groups
     owns_backup = is_core
 
     restic_repository = host.data.restic_primary_repository
@@ -193,7 +212,7 @@ else:
       - {json.dumps(f"{hooks_dir}/containers start")}
 """
 
-    profile_path = "/etc/platform-resticprofile.yaml"
+    profile_path = restic_profile_path
     dropin_name = "platform-restic-systemd.conf"
     healthchecks_ping_key = host.data.healthchecks_ping_key
     if not healthchecks_ping_key:

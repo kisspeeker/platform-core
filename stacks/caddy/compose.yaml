@@ -20,8 +20,8 @@ services:
     env_file:
       - /opt/platform/secrets/caddy/caddy.env
     ports:
-      - "${MESH_IP:?set MESH_IP}:80:80"
-      - "${MESH_IP:?set MESH_IP}:443:443"
+      - "80:80"
+      - "443:443"
     volumes:
       - /opt/platform/stacks/caddy/config:/etc/caddy:ro
       - /opt/platform/data/caddy:/data

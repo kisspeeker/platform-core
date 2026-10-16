@@ -6,7 +6,6 @@ import sys
 from itertools import combinations
 
 from firewall import host_ports
-import mesh
 from hosts import (
     customer_dns_records,
     customer_hosts,
@@ -17,7 +16,7 @@ from tunnel import hostnames
 
 DASHED = "{style.stroke-dash: 3}"
 CARD = '{shape: rectangle; style.fill: "#F7F8FE"}'
-FIELDS = {"role": "role", "provider": "provider", "public": "public_ip", "mesh": "mesh_ip"}
+FIELDS = {"role": "role", "provider": "provider", "public": "public_ip"}
 
 HOST = "host"
 CADDY = "caddy"
@@ -73,11 +72,6 @@ def _card(
     return "\n".join([f"{eid}: |md", "\n\n".join(filter(None, groups)), "|", f"{eid}: {CARD}"])
 
 
-def _clients_card(clients: list[tuple[str, str]]) -> str:
-    rows = "\n\n".join(f"`name` {n}\\\n`mesh` {ip}" for n, ip in clients)
-    return "\n".join(["clients: |md", f"### 🔘 clients\n\n{rows}", "|", f"clients: {CARD}"])
-
-
 def _service_card(eid: str, title: str, rows: list[str] = ()) -> str:
     body = "\n\n".join([f"### {title}", "\\\n".join(f"`{row}`" for row in rows)])
     return "\n".join([f"{eid}: |md", body, "|", f"{eid}: {CARD}"])
@@ -98,17 +92,14 @@ def _host_group(name: str, meta: dict, items: list[str]) -> list[str]:
 
 
 def render_hosts(hosts: dict, records: dict) -> str:
-    servers = sorted(n for n, m in hosts.items() if m["role"] != mesh.CLIENT)
-    clients = sorted(n for n, m in hosts.items() if m["role"] == mesh.CLIENT)
+    servers = sorted(hosts)
 
     items = ["direction: down"]
-    if clients:
-        items.append(_clients_card([(n, hosts[n]["mesh_ip"]) for n in clients]))
     cards = [
         _card(
             n,
             hosts[n],
-            ("role", "provider", "public", "mesh"),
+            ("role", "provider", "public"),
             _fqdns(records, n),
         )
         for n in servers
@@ -120,20 +111,14 @@ def render_hosts(hosts: dict, records: dict) -> str:
     items += [
         f"servers.{_id(a)} <-> servers.{_id(b)}: {DASHED}"
         for a, b in combinations(servers, 2)
-        if mesh.linked(a, b, hosts)
+        if not hosts[a].get("isolated") and not hosts[b].get("isolated")
     ]
-    if clients:
-        items += [
-            f"clients -> servers.{_id(n)}: {DASHED}"
-            for n in servers
-            if any(mesh.linked(cl, n, hosts) for cl in clients)
-        ]
     return "\n".join(["direction: right", "", *_block("mesh", items), ""])
 
 
 def render_ingress(hosts: dict, records: dict) -> str:
     groups, edges = [], []
-    for n in sorted(n for n, m in hosts.items() if m["role"] != mesh.CLIENT):
+    for n in sorted(hosts):
         m = hosts[n]
         public = _ports(m, "public")
         tunneled = hostnames(records, n)
@@ -186,7 +171,7 @@ def render_monitoring(hosts: dict, cfg: dict) -> str:
     if not monitor or not probe:
         return "monitoring: Monitoring is disabled\n"
 
-    servers = sorted(n for n, m in hosts.items() if m["role"] != mesh.CLIENT)
+    servers = sorted(hosts)
     groups: list[str] = []
     for name in servers:
         items = [

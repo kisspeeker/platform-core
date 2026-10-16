@@ -10,7 +10,7 @@ pyinfra/pyinfra-debug.log
 /.idea
 .vscode/*
 
-# Secrets / local dumps (AWG private keys — никогда в git)
+# Secrets / local dumps
 **/.env
 **/.env.*
 !**/.env.example

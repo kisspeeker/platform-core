@@ -69,7 +69,6 @@ host_env = "".join(
         env_assignment("ADMIN_USER", host.data.admin_user),
         env_assignment("DEPLOY_GROUP", gitlab_group),
         env_assignment("INVENTORY_HOSTNAME", hostname),
-        env_assignment("MESH_IP", host.data.mesh_ip),
         env_assignment("ACME_ZONE", acme_zone),
         env_assignment("DNS_ZONE", host.data.dns_zone),
         env_assignment("GITLAB_REGISTRY", host.data.gitlab_registry),

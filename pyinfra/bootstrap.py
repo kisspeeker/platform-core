@@ -3,12 +3,12 @@ from pyinfra.operations import server
 
 local.include("tasks/monitor_silence.py")
 local.include("tasks/common.py")
+local.include("tasks/netbird.py")
 local.include("tasks/docker.py")
 local.include("tasks/lazydocker.py")
 local.include("tasks/lockdown.py")
 local.include("tasks/seed.py")
 local.include("tasks/sops.py")
-local.include("tasks/awg.py")
 local.include("tasks/restic.py")
 local.include("tasks/deploy.py")
 local.include("tasks/monitor_labs.py")

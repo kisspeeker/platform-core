@@ -22,7 +22,7 @@ services:
       - /opt/platform/data/node-exporter/textfile:/textfile:ro
 {% if publish %}
     ports:
-      - "{{ mesh_ip }}:9100:9100"
+      - "9100:9100"
 {% endif %}
 {% if join_metrics %}
     networks:

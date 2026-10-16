@@ -1,5 +1,3 @@
-"""UFW rules from infra ports `scope` (public | mesh)."""
-
 from __future__ import annotations
 
 from collections.abc import Container, Mapping
@@ -8,7 +6,6 @@ PROTOS = ("tcp", "udp")
 
 
 def host_ports(ports: Mapping, scope: str, groups: Container, data: Mapping) -> dict[str, dict]:
-    """Ports of `scope` enabled on a host: `when` matches a group (role) or a truthy host flag."""
     out = {}
     for key, spec in ports.items():
         when = spec.get("when")
@@ -20,12 +17,11 @@ def host_ports(ports: Mapping, scope: str, groups: Container, data: Mapping) -> 
     return out
 
 
-def ufw_rules(host, mesh_cidr: str) -> list[str]:
-    """Same format as `ufw show added`."""
+def ufw_rules(host) -> list[str]:
     def ports(scope: str) -> list[dict]:
         return list(host_ports(host.data.ports, scope, host.groups, host.data).values())
 
     return [
         *[f"ufw allow {p['port']}/{p['proto']}" for p in ports("public")],
-        *[f"ufw allow from {mesh_cidr} to any port {p['port']} proto {p['proto']}" for p in ports("mesh")],
+        *[f"ufw allow in on wt0 to any port {p['port']} proto {p['proto']}" for p in ports("netbird")],
     ]

@@ -1,5 +1,5 @@
 {{ prometheus_fqdn }} {
-	import mesh_admin
+	import netbird_admin
 	tls {
 		dns cloudflare {env.CF_ACME_TOKEN}
 		dns_challenge_override_domain {{ acme_override }}

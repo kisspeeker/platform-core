@@ -1,15 +1,14 @@
-import mesh
-from hosts import customer_hosts, load_customer_cfg
+from hosts import CORE, customer_hosts, load_customer_cfg
 
 _cfg = load_customer_cfg()
-_mesh_hosts = customer_hosts(_cfg)
+_platform_hosts = customer_hosts(_cfg)
 
 customer = []
 core = []
 node = []
 
 for _name in _cfg["servers"]:
-    _meta = _mesh_hosts[_name]
+    _meta = _platform_hosts[_name]
     _row = (
         _name,
         {
@@ -18,11 +17,11 @@ for _name in _cfg["servers"]:
             "ssh_port": int(_meta["ssh_port"]),
             "hostname": _name,
             "customer": True,
-            "mesh_hosts": _mesh_hosts,
+            "platform_hosts": _platform_hosts,
         },
     )
     customer.append(_row)
-    if _meta["role"] == mesh.CORE:
+    if _meta["role"] == CORE:
         core.append(_row)
     else:
         node.append(_row)

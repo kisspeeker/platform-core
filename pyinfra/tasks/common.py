@@ -21,8 +21,7 @@ admin_user = host.data.admin_user
 breakglass_user = host.data.breakglass_user
 platform_root = host.data.platform_root
 ssh_public_key = host.data.ssh_public_key
-mesh_cidr = host.data.mesh_cidr
-fail2ban_ignoreip = ("127.0.0.1/8", "::1", mesh_cidr)
+fail2ban_ignoreip = ("127.0.0.1/8", "::1")
 target_hostname = host.data.hostname
 
 resolved_conf = files.put(
@@ -223,6 +222,6 @@ files.block(
     marker="# {mark} platform google-authenticator",
 )
 
-ufw_allow = firewall.ufw_rules(host, mesh_cidr)
+ufw_allow = firewall.ufw_rules(host)
 configure_ufw(rules=ufw_allow)
 configure_fail2ban(ignore_ips=fail2ban_ignoreip)

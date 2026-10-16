@@ -17,8 +17,7 @@ services:
     volumes:
       - /opt/platform/stacks/blackbox-exporter/blackbox.yml:/etc/blackbox_exporter/blackbox.yml:ro
     ports:
-      - "127.0.0.1:9115:9115"
-      - "{{ mesh_ip }}:9115:9115"
+      - "9115:9115"
     networks:
       - metrics
 

@@ -23,7 +23,7 @@ services:
       - /opt/platform/stacks/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - /opt/platform/data/prometheus:/prometheus
     ports:
-      - "{{ mesh_ip }}:9090:9090"
+      - "9090:9090"
     networks:
       - metrics
 {% if external_url %}
@@ -51,7 +51,7 @@ services:
       - /opt/platform/stacks/prometheus/telegram.tmpl:/etc/alertmanager/telegram.tmpl:ro
       - /opt/platform/data/alertmanager:/alertmanager
     ports:
-      - "{{ mesh_ip }}:9093:9093"
+      - "9093:9093"
     networks:
       - metrics
 

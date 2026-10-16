@@ -4,7 +4,6 @@ import re
 from urllib.parse import urlparse
 
 from hosts import load_customer_cfg
-from mesh import MESH
 
 
 # ---------------------------------------------------------------------------
@@ -106,36 +105,32 @@ breakglass_user = "breakglass"
 platform_root = "/opt/platform"
 deploy_user = "deploy"
 
-mesh = MESH
 default_ports = {
     "ssh": {"port": 22, "proto": "tcp", "scope": "public"},
-    "http": {"port": 80, "proto": "tcp", "scope": "mesh"},
-    "https": {"port": 443, "proto": "tcp", "scope": "mesh"},
-    "awg": {"port": 51820, "proto": "udp", "scope": "public"},
-    "dns": {"port": 53, "proto": "udp", "scope": "mesh", "when": "core"},
-    "dns_tcp": {"port": 53, "proto": "tcp", "scope": "mesh", "when": "core"},
+    "http": {"port": 80, "proto": "tcp", "scope": "netbird"},
+    "https": {"port": 443, "proto": "tcp", "scope": "netbird"},
     "node_exporter": {
         "port": 9100,
         "proto": "tcp",
-        "scope": "mesh",
+        "scope": "netbird",
         "when": "monitoring_enabled",
     },
     "prometheus": {
         "port": 9090,
         "proto": "tcp",
-        "scope": "mesh",
+        "scope": "netbird",
         "when": "is_monitor_host",
     },
     "alertmanager": {
         "port": 9093,
         "proto": "tcp",
-        "scope": "mesh",
+        "scope": "netbird",
         "when": "is_monitor_host",
     },
     "blackbox_exporter": {
         "port": 9115,
         "proto": "tcp",
-        "scope": "mesh",
+        "scope": "netbird",
         "when": "is_monitor_probe_host",
     },
 }
@@ -144,7 +139,6 @@ cloudflare_api = "https://api.cloudflare.com/client/v4"
 ssh_public_key = _getenv("SSH_PUBLIC_KEY")
 deploy_public_key = _getenv("DEPLOY_PUBLIC_KEY")
 deploy_sops_age_key = _getenv("DEPLOY_SOPS_AGE_KEY")
-awg_mesh_secret = _getenv("AWG_MESH_SECRET")
 cf_admin_token = _getenv("CF_ADMIN_TOKEN")
 
 _restic_primary, restic_enabled = _getenv_all_or_nothing(

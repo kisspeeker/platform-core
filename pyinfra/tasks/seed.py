@@ -1,13 +1,13 @@
 import io
-import ipaddress
+import shlex
 from pathlib import Path
 
 from pyinfra import host
 from pyinfra.facts.docker import DockerNetwork
+from pyinfra.facts.files import File
 from pyinfra.operations import docker, files, server
 from pyinfra.operations.util import any_changed
 
-import mesh
 import tunnel
 from hosts import customer_dns_records
 
@@ -24,13 +24,10 @@ registry_token = host.data.platform_deploy_token
 
 registry_server = host.data.gitlab_registry
 acme_zone = host.data.acme_zone
-mesh_cidr = host.data.mesh_cidr
-mesh_hosts = host.data.mesh_hosts
-mesh_admin_ips = mesh.admin_ips(mesh_hosts)
 
 proxy_subnet = "172.31.0.0/16"
 caddy_runtime_id = "10001"
-seed_caddy_snippets = ["tls.caddy", "mesh.caddy"]
+seed_caddy_snippets = ["tls.caddy", "netbird.caddy"]
 seed_fabric_dirs = [
     ("", "755"),
     ("stacks", "755"),
@@ -45,11 +42,6 @@ if not (registry_user and registry_token and cf_acme_token):
     raise ValueError(
         "Set PLATFORM_DEPLOY_USERNAME, PLATFORM_DEPLOY_TOKEN, CF_ACME_TOKEN "
         "in secrets.sops.env"
-    )
-
-if ipaddress.ip_network(proxy_subnet).overlaps(ipaddress.ip_network(mesh_cidr)):
-    raise ValueError(
-        f"mesh_cidr {mesh_cidr} overlaps proxy network {proxy_subnet}"
     )
 
 if not acme_email:
@@ -118,8 +110,6 @@ for snippet in seed_caddy_snippets:
         group=admin_user,
         mode="644",
         acme_email=acme_email,
-        mesh_cidr=mesh_cidr,
-        mesh_admin_ips=mesh_admin_ips,
         proxy_subnet=proxy_subnet,
         acme_zone=acme_zone,
     )
@@ -163,7 +153,6 @@ caddy_env = files.template(
 caddy_dotenv = files.put(
     name="Write Caddy .env",
     src=io.StringIO(
-        f"MESH_IP={host.data.mesh_ip}\n"
         f"CADDY_IMAGE={host.data.gitlab_caddy_image}\n"
     ),
     dest=f"{stack_dest}/.env",
@@ -285,4 +274,21 @@ if tunnel_enabled:
         present=True,
         force_recreate=True,
         _if=cloudflared_env.did_change,
+    )
+else:
+    cloudflared_dest = f"{platform_root}/stacks/cloudflared"
+    cloudflared_compose = f"{cloudflared_dest}/compose.yaml"
+    server.shell(
+        name="Stop obsolete cloudflared",
+        commands=[
+            f"if [ -f {shlex.quote(f'{cloudflared_dest}/compose.yaml')} ]; then "
+            f"docker compose --project-directory {shlex.quote(cloudflared_dest)} "
+            "down --remove-orphans; fi"
+        ],
+        _if=lambda: bool(host.get_fact(File, path=cloudflared_compose)),
+    )
+    files.file(
+        name="Remove obsolete cloudflared compose",
+        path=cloudflared_compose,
+        present=False,
     )

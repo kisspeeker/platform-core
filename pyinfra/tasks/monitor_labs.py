@@ -4,16 +4,30 @@ import shlex
 from pathlib import Path
 
 from pyinfra import host
+from pyinfra.facts.files import File
 from pyinfra.operations import files, server, systemd
+from pyinfra.operations.util import any_changed
 
-import mesh
+from hosts import MESH
 
 platform_root = host.data.platform_root
 core_root = Path(__file__).resolve().parents[2]
 hostname = host.data.hostname
-hosts = host.data.mesh_hosts
+hosts = host.data.platform_hosts
 hub = host.data.monitor_host
 probe_host = host.data.monitor_probe_host
+servers = [
+    name
+    for name, meta in hosts.items()
+    if meta["role"] in MESH
+]
+monitoring_enabled = bool(hub and probe_host and hostname in servers)
+is_hub = monitoring_enabled and hostname == hub
+is_probe = monitoring_enabled and hostname == probe_host
+heartbeat_enabled = bool(
+    is_probe
+    and host.data.healthchecks_ping_key
+)
 
 
 def _dirs(*items: tuple[str, str]) -> None:
@@ -53,17 +67,118 @@ def _up(name: str) -> None:
     )
 
 
-servers = [
-    name
-    for name, meta in hosts.items()
-    if meta["role"] in (mesh.CORE, mesh.NODE)
-]
+def _down(name: str) -> None:
+    project_dir_path = f"{platform_root}/stacks/{name}"
+    compose_file_path = f"{project_dir_path}/compose.yaml"
+    project_dir = shlex.quote(project_dir_path)
+    compose_file = shlex.quote(compose_file_path)
+    server.shell(
+        name=f"Stop obsolete {name}",
+        commands=[
+            f"if [ -f {compose_file} ]; then "
+            f"docker compose --project-directory {project_dir} "
+            "down --remove-orphans; fi"
+        ],
+        _if=lambda: bool(host.get_fact(File, path=compose_file_path)),
+    )
+    files.file(
+        name=f"Remove obsolete {name} compose",
+        path=compose_file_path,
+        present=False,
+    )
 
-if hub and probe_host and hostname in servers:
-    is_hub = hostname == hub
-    is_probe = hostname == probe_host
 
-    mesh_ip = host.data.mesh_ip
+if not heartbeat_enabled:
+    heartbeat_paths = (
+        "/etc/systemd/system/platform-monitor-heartbeat.timer",
+        "/etc/systemd/system/platform-monitor-heartbeat.service",
+        "/usr/local/bin/platform-monitor-heartbeat",
+        f"{platform_root}/secrets/monitoring/healthchecks.env",
+    )
+    server.shell(
+        name="Disable obsolete monitoring heartbeat",
+        commands=[
+            "if [ -e /etc/systemd/system/platform-monitor-heartbeat.timer ]; "
+            "then systemctl disable --now platform-monitor-heartbeat.timer; fi",
+            "if [ -e /etc/systemd/system/platform-monitor-heartbeat.service ]; "
+            "then systemctl stop platform-monitor-heartbeat.service; fi",
+        ],
+        _if=lambda: any(
+            host.get_fact(File, path=path) for path in heartbeat_paths
+        ),
+    )
+
+    heartbeat_files = [
+        files.file(
+            name=f"Remove obsolete {Path(path).name}",
+            path=path,
+            present=False,
+        )
+        for path in heartbeat_paths
+    ]
+
+    systemd.daemon_reload(
+        name="Reload systemd after monitoring heartbeat cleanup",
+        _if=any_changed(*heartbeat_files),
+    )
+
+
+if not is_probe:
+    _down("blackbox-exporter")
+
+if not is_hub:
+    _down("prometheus")
+    prometheus_caddy_site = files.file(
+        name="Remove obsolete Prometheus Caddy site",
+        path=f"{platform_root}/stacks/caddy/config/sites/prometheus.caddy",
+        present=False,
+    )
+    server.shell(
+        name="Reload Caddy after Prometheus site cleanup",
+        commands=[
+            "docker exec caddy caddy validate "
+            "--config /etc/caddy/Caddyfile --adapter caddyfile "
+            "&& docker exec caddy caddy reload "
+            "--config /etc/caddy/Caddyfile --adapter caddyfile"
+        ],
+        _if=prometheus_caddy_site.did_change,
+    )
+
+if not monitoring_enabled:
+    _down("node-exporter")
+    container_metric_paths = (
+        "/etc/systemd/system/platform-containers.timer",
+        "/etc/systemd/system/platform-containers.service",
+        "/usr/local/bin/platform-containers",
+    )
+    server.shell(
+        name="Disable obsolete container metrics timer",
+        commands=[
+            "if [ -e /etc/systemd/system/platform-containers.timer ]; "
+            "then systemctl disable --now platform-containers.timer; fi",
+            "if [ -e /etc/systemd/system/platform-containers.service ]; "
+            "then systemctl stop platform-containers.service; fi",
+        ],
+        _if=lambda: any(
+            host.get_fact(File, path=path) for path in container_metric_paths
+        ),
+    )
+    container_metric_files = [
+        files.file(
+            name=f"Remove obsolete {Path(path).name}",
+            path=path,
+            present=False,
+        )
+        for path in container_metric_paths
+    ]
+    systemd.daemon_reload(
+        name="Reload systemd after container metrics cleanup",
+        _if=any_changed(*container_metric_files),
+    )
+
+if monitoring_enabled:
+
+    mesh_hostname = host.data.mesh_hostname
     textfile = f"{platform_root}/data/node-exporter/textfile"
 
     nodes = [
@@ -72,7 +187,7 @@ if hub and probe_host and hostname in servers:
             "target": (
                 "lab-node-exporter:9100"
                 if name == hub
-                else f"{hosts[name]['mesh_ip']}:9100"
+                else f"{hosts[name]['mesh_hostname']}:9100"
             ),
         }
         for name in servers
@@ -155,7 +270,6 @@ if hub and probe_host and hostname in servers:
 
     _put_compose(
         "node-exporter",
-        mesh_ip=mesh_ip,
         join_metrics=is_hub,
         publish=not is_hub,
     )
@@ -167,9 +281,9 @@ if hub and probe_host and hostname in servers:
         external_url = (
             f"https://{host.data.monitor_ui}" if host.data.monitor_ui else ""
         )
-        monitor_mesh_ip = hosts[hub]["mesh_ip"]
+        monitor_mesh_hostname = hosts[hub]["mesh_hostname"]
 
-        _put_compose("blackbox-exporter", mesh_ip=mesh_ip)
+        _put_compose("blackbox-exporter")
         _dirs((secrets_dir, "700"))
 
         blackbox_cfg = files.put(
@@ -211,9 +325,9 @@ if hub and probe_host and hostname in servers:
                     "HEALTHCHECKS_URL="
                     f"{shlex.quote(healthchecks_url)}\n"
                     "MONITOR_PROMETHEUS_URL="
-                    f"{shlex.quote(f'http://{monitor_mesh_ip}:9090/-/ready')}\n"
+                    f"{shlex.quote(f'http://{monitor_mesh_hostname}:9090/-/ready')}\n"
                     "MONITOR_ALERTMANAGER_URL="
-                    f"{shlex.quote(f'http://{monitor_mesh_ip}:9093/-/ready')}\n"
+                    f"{shlex.quote(f'http://{monitor_mesh_hostname}:9093/-/ready')}\n"
                     f"MONITOR_EXTERNAL_URL={shlex.quote(external_url)}\n"
                 ),
                 dest=f"{secrets_dir}/healthchecks.env",
@@ -321,7 +435,6 @@ if hub and probe_host and hostname in servers:
         _put_compose(
             "prometheus",
             external_url=external_url,
-            mesh_ip=mesh_ip,
         )
         _dirs((secrets_dir, "700"))
 
@@ -371,12 +484,12 @@ if hub and probe_host and hostname in servers:
             {
                 "service": "prometheus",
                 "module": "http_2xx",
-                "target_yaml": json.dumps(f"http://{mesh_ip}:9090/-/ready"),
+                "target_yaml": json.dumps(f"http://{mesh_hostname}:9090/-/ready"),
             },
             {
                 "service": "alertmanager",
                 "module": "http_2xx",
-                "target_yaml": json.dumps(f"http://{mesh_ip}:9093/-/ready"),
+                "target_yaml": json.dumps(f"http://{mesh_hostname}:9093/-/ready"),
             },
         ]
         if external_url:
@@ -413,7 +526,7 @@ if hub and probe_host and hostname in servers:
             probes=probes,
             monitor_host=hostname,
             probe_host=probe_host,
-            blackbox_address=f"{hosts[probe_host]['mesh_ip']}:9115",
+            blackbox_address=f"{hosts[probe_host]['mesh_hostname']}:9115",
         )
 
         telegram_monitoring_thread_id = host.data.telegram_threads.get(
