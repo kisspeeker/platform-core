@@ -1,5 +1,8 @@
 # Platform
 
+Automation for setting up, securing, and running Linux servers and Docker workloads with `pyinfra`.
+Deployments, firewall rules, monitoring, and backups all live in one place.
+
 ```sh
 mise install && uv sync --upgrade
 ```

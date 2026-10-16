@@ -29,8 +29,10 @@ def dump_artefacts(state, host):
             remote, f"{platform_root}/secrets/breakglass/otp_secret"
         ).upper()
         hosts[name] = {
-            "public_ip": remote.data.ssh_hostname,
-            "mesh_hostname": remote.data.mesh_hostname,
+            "hostname": name,
+            "role": remote.data.role,
+            "public_ip": remote.data.public_ip,
+            "netbird_fqdn": f"{name}.peers.{remote.data.dns_zone}",
             "breakglass_user": breakglass_user,
             "breakglass_password": _read(
                 remote, f"{platform_root}/secrets/breakglass/password"
@@ -42,14 +44,24 @@ def dump_artefacts(state, host):
             ),
         }
 
+    restic = {
+        "primary": {
+            "password": _read(host, "/etc/platform-restic.password"),
+        },
+    }
+    offsite_password = _read(host, "/etc/platform-restic-offsite.password")
+    if offsite_password:
+        restic["offsite"] = {"password": offsite_password}
+
     artefacts = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "hosts": hosts,
-        "restic": {"password": _read(host, "/etc/platform-restic.password")},
+        "restic": restic,
     }
 
     sops_env.set_secrets(
-        RESTIC_PASSWORD=artefacts["restic"]["password"],
+        RESTIC_PRIMARY_PASSWORD=restic["primary"]["password"],
+        RESTIC_OFFSITE_PASSWORD=offsite_password,
     )
     sops_env.write_artefacts(artefacts)
 

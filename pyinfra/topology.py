@@ -94,7 +94,7 @@ def _host_group(name: str, meta: dict, items: list[str]) -> list[str]:
 def render_hosts(hosts: dict, records: dict) -> str:
     servers = sorted(hosts)
 
-    items = ["direction: down"]
+    items = ["direction: right"]
     cards = [
         _card(
             n,
@@ -109,11 +109,20 @@ def render_hosts(hosts: dict, records: dict) -> str:
         ['label: ""', "style.fill: transparent", "style.stroke: transparent", "direction: right", *cards],
     )))
     items += [
-        f"servers.{_id(a)} <-> servers.{_id(b)}: {DASHED}"
+        f"servers.{_id(a)} <-> servers.{_id(b)}: WireGuard P2P {DASHED}"
         for a, b in combinations(servers, 2)
         if not hosts[a].get("isolated") and not hosts[b].get("isolated")
     ]
-    return "\n".join(["direction: right", "", *_block("mesh", items), ""])
+    return "\n".join([
+        "direction: down",
+        "",
+        'cloud: "NetBird Cloud" {shape: cloud}',
+        "",
+        *_block("mesh", items),
+        "",
+        f"cloud <-> mesh: control / discovery / relay fallback {DASHED}",
+        "",
+    ])
 
 
 def render_ingress(hosts: dict, records: dict) -> str:
@@ -132,7 +141,7 @@ def render_ingress(hosts: dict, records: dict) -> str:
             _service_card(
                 CADDY,
                 "Caddy",
-                [f"mesh :{m['http_port']} / :{m['https_port']}"],
+                [f"netbird :{m['http_port']} / :{m['https_port']}"],
             ),
         ]
         if tunneled:
@@ -178,7 +187,7 @@ def render_monitoring(hosts: dict, cfg: dict) -> str:
             _service_card(
                 NODE_EXPORTER,
                 "Node Exporter",
-                [f"mesh :{hosts[name][f'{NODE_EXPORTER}_port']}"],
+                [f"netbird :{hosts[name][f'{NODE_EXPORTER}_port']}"],
             )
         ]
         if name == monitor:
@@ -186,12 +195,12 @@ def render_monitoring(hosts: dict, cfg: dict) -> str:
                 _service_card(
                     PROMETHEUS,
                     "Prometheus",
-                    [f"mesh :{hosts[name][f'{PROMETHEUS}_port']}"],
+                    [f"netbird :{hosts[name][f'{PROMETHEUS}_port']}"],
                 ),
                 _service_card(
                     ALERTMANAGER,
                     "Alertmanager",
-                    [f"mesh :{hosts[name][f'{ALERTMANAGER}_port']}"],
+                    [f"netbird :{hosts[name][f'{ALERTMANAGER}_port']}"],
                 ),
             ]
         if name == probe:
@@ -199,7 +208,7 @@ def render_monitoring(hosts: dict, cfg: dict) -> str:
                 _service_card(
                     BLACKBOX_EXPORTER,
                     "Blackbox Exporter",
-                    [f"mesh :{hosts[name][f'{BLACKBOX_EXPORTER}_port']}"],
+                    [f"netbird :{hosts[name][f'{BLACKBOX_EXPORTER}_port']}"],
                 ),
                 _service_card(HEARTBEAT, "Monitoring heartbeat", ["every 5 min"]),
             ]

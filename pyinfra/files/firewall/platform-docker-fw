@@ -59,14 +59,6 @@ setup_docker_rules() {
   # Block containers from forwarding traffic through the host into NetBird.
   "$fw_cmd" -A PLATFORM-DOCKER -o wt0 -j DROP
 
-  # DOCKER-USER sees DNATed packets, so match the original published port.
-  for endpoint in $netbird_ingress_ports; do
-    proto=${endpoint%%:*}
-    port=${endpoint#*:}
-    "$fw_cmd" -A PLATFORM-DOCKER ! -i wt0 \
-      -p "$proto" -m conntrack --ctorigdstport "$port" -j DROP
-  done
-
   # On the proxy network, allow only Caddy and cloudflared to initiate
   # connections to other containers on that same network.
   if [ -n "$proxy_bridge" ]; then
@@ -99,6 +91,22 @@ setup_docker_rules() {
     "$fw_cmd" -A PLATFORM-DOCKER \
       -i "$proxy_bridge" -o "$proxy_bridge" -j DROP
   fi
+
+  # Traffic originating on a Docker bridge is container egress, not ingress to
+  # a published host port. Return it only after the NetBird and proxy-network
+  # restrictions above have been applied.
+  "$fw_cmd" -A PLATFORM-DOCKER -i br-+ -j RETURN
+  "$fw_cmd" -A PLATFORM-DOCKER -i docker0 -j RETURN
+
+  # DOCKER-USER sees DNATed packets, so match the original published port.
+  # Container egress has already returned above; these drops now apply only to
+  # traffic entering through a non-Docker, non-NetBird interface.
+  for endpoint in $netbird_ingress_ports; do
+    proto=${endpoint%%:*}
+    port=${endpoint#*:}
+    "$fw_cmd" -A PLATFORM-DOCKER ! -i wt0 \
+      -p "$proto" -m conntrack --ctorigdstport "$port" -j DROP
+  done
 
   "$fw_cmd" -A PLATFORM-DOCKER -j RETURN
 

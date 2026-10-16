@@ -81,10 +81,6 @@ artefacts:
 	$(NEED_CUSTOMER)
 	@$(SOPS) '$(PYINFRA) artefacts.py -y $(ARGS)'
 
-artefacts-show:
-	$(NEED_CUSTOMER)
-	@mise exec -- sops decrypt $(CUSTOMER_DIR)/artefacts.sops.json | less
-
 d2:
 	$(NEED_CUSTOMER)
 	@$(SOPS) 'CUSTOMER_YAML="$(CUSTOMER_YAML)" mise exec -- uv run --locked --directory pyinfra python topology.py'
